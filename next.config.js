@@ -8,7 +8,8 @@ const withBundleAnalyzer = require('@next/bundle-analyzer')({
 
 const nextConfig = {
   reactStrictMode: true,
-  webpack: (config, {  }) => {
+  webpack: (config, { isServer }) => {
+    config.experiments = { asyncWebAssembly: true, layers: true };
 
     config.resolve.extensions.push(".ts", ".tsx");
     config.resolve.fallback = { fs: false };

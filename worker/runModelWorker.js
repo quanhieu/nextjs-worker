@@ -18,3 +18,5 @@ async function run_model(input) {
 }
 
 // you are a solution architect, have experient in nextjs and webworker, I have a function "createModelCpu" and "runModel" it very heavy and made website lag, now i need you help migrate runModel work on web-worker
+
+// you are a solution architect, have experient in nextjs and webworker, I have a function "createModelCpu" and "dispatchModel" it very heavy and made website lag, now i need you help migrate createModelCpu and dispatchModel to worker, createModelCpu define in worker and reuse model with dispatchModel, and worker need write by typescript
