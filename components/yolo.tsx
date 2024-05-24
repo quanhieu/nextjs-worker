@@ -7,8 +7,8 @@ import ops from "ndarray-ops"
 import { yoloClasses } from "../data/yolo_classes";
 import { createModelCpu, dispatchModel } from "../utils/runModel";
 
-const modelResolution = [256,256];
-const modelName = 'yolov7-tiny_256x256.onnx';
+const modelResolution = [640,640];
+const modelName = 'yolov7-tiny_640x640.onnx';
 
 const WebcamComponent = () => {
   const [inferenceTime, setInferenceTime] = useState<number>(0);
@@ -94,7 +94,7 @@ const WebcamComponent = () => {
     return ctx;
   }, []);
 
-  const preprocess = useCallback((ctx: CanvasRenderingContext2D) => {
+  const prepareData = useCallback((ctx: CanvasRenderingContext2D) => {
     const resizedCtx = resizeCanvasCtx(
       ctx,
       modelResolution[0],
@@ -149,7 +149,7 @@ const WebcamComponent = () => {
     return `rgb(${r},${g},0)`;
   }, []);
 
-  const postprocess = useCallback(async (
+  const drawCanvas = useCallback(async (
     tensor: Tensor,
     ctx: CanvasRenderingContext2D
   ) => {
@@ -199,7 +199,7 @@ const WebcamComponent = () => {
   }, [conf2color]);
 
   const runModel = useCallback(async (ctx: CanvasRenderingContext2D) => {
-    const data = preprocess(ctx);
+    const data = prepareData(ctx);
     let outputTensor: Tensor;
     let inferenceTime: number;
     [outputTensor, inferenceTime] = await dispatchModel(
@@ -207,9 +207,9 @@ const WebcamComponent = () => {
       data
     );
 
-    postprocess(outputTensor, ctx);
+    drawCanvas(outputTensor, ctx);
     setInferenceTime(inferenceTime);
-  }, [postprocess, preprocess, session]);
+  }, [drawCanvas, prepareData, session]);
 
   const runLiveDetection = useCallback(async () => {
     if (liveDetection.current) {
@@ -219,9 +219,9 @@ const WebcamComponent = () => {
     liveDetection.current = true;
     while (liveDetection.current) {
       const startTime = Date.now();
-      const ctx = capture();
-      if (!ctx) return;
-      await runModel(ctx);
+      const context = capture();
+      if (!context) return;
+      await runModel(context);
       setTotalTime(Date.now() - startTime);
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() => resolve())
@@ -231,19 +231,19 @@ const WebcamComponent = () => {
 
   const processImage = useCallback(async () => {
     reset();
-    const ctx = capture();
-    if (!ctx) return;
+    const context = capture();
+    if (!context) return;
 
     // create a copy of the canvas
     const boxCtx = document
       .createElement("canvas")
       .getContext("2d") as CanvasRenderingContext2D;
-    boxCtx.canvas.width = ctx.canvas.width;
-    boxCtx.canvas.height = ctx.canvas.height;
-    boxCtx.drawImage(ctx.canvas, 0, 0);
+    boxCtx.canvas.width = context.canvas.width;
+    boxCtx.canvas.height = context.canvas.height;
+    boxCtx.drawImage(context.canvas, 0, 0);
 
     await runModel(boxCtx);
-    ctx.drawImage(boxCtx.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height);
+    context.drawImage(boxCtx.canvas, 0, 0, context.canvas.width, context.canvas.height);
   }, [capture, runModel]);
 
   const reset = useCallback(async () => {
