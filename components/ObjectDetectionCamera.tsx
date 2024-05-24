@@ -1,17 +1,35 @@
 import Webcam from "react-webcam";
-import { useRef, useState, useEffect, useLayoutEffect } from "react";
-import { runModelUtils } from "../utils";
+import { useRef, useState, useEffect } from "react";
 import { Tensor } from "onnxruntime-web";
+import { round } from "lodash";
+import ndarray from "ndarray";
+import ops from "ndarray-ops"
+import { yoloClasses } from "../data/yolo_classes";
+import { createModelCpu, dispatchModel } from "../utils/runModel";
 
-const WebcamComponent = (props: any) => {
+const modelResolution = [256,256];
+const modelName = 'yolov7-tiny_256x256.onnx';
+
+const WebcamComponent = () => {
   const [inferenceTime, setInferenceTime] = useState<number>(0);
   const [totalTime, setTotalTime] = useState<number>(0);
   const webcamRef = useRef<Webcam>(null);
   const videoCanvasRef = useRef<HTMLCanvasElement>(null);
   const liveDetection = useRef<boolean>(false);
-
   const [facingMode, setFacingMode] = useState<string>("environment");
   const originalSize = useRef<number[]>([0, 0]);
+  const [session, setSession] = useState<any>(null);
+
+    useEffect(() => {
+    const getSession = async () => {
+      const session = await createModelCpu(
+        `./_next/static/chunks/pages/${modelName}`
+      );
+      setSession(session);
+    };
+    getSession();
+  }, []);
+
 
   const capture = () => {
     const canvas = videoCanvasRef.current!;
@@ -37,16 +55,160 @@ const WebcamComponent = (props: any) => {
     return context;
   };
 
+  const resizeCanvasCtx = (
+    ctx: CanvasRenderingContext2D,
+    targetWidth: number,
+    targetHeight: number,
+    inPlace = false
+  ) => {
+    let canvas: HTMLCanvasElement;
+
+    if (inPlace) {
+      // Get the canvas element that the context is associated with
+      canvas = ctx.canvas;
+
+      // Set the canvas dimensions to the target width and height
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+
+      // Scale the context to the new dimensions
+      ctx.scale(
+        targetWidth / canvas.clientWidth,
+        targetHeight / canvas.clientHeight
+      );
+    } else {
+      // Create a new canvas element with the target dimensions
+      canvas = document.createElement("canvas");
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+
+      // Draw the source canvas into the target canvas
+      canvas
+        .getContext("2d")!
+        .drawImage(ctx.canvas, 0, 0, targetWidth, targetHeight);
+
+      // Get a new rendering context for the new canvas
+      ctx = canvas.getContext("2d")!;
+    }
+
+    return ctx;
+  };
+
+
+  const preprocess = (ctx: CanvasRenderingContext2D) => {
+    const resizedCtx = resizeCanvasCtx(
+      ctx,
+      modelResolution[0],
+      modelResolution[1]
+    );
+
+    const imageData = resizedCtx.getImageData(
+      0,
+      0,
+      modelResolution[0],
+      modelResolution[1]
+    );
+    const { data, width, height } = imageData;
+    // data processing
+    const dataTensor = ndarray(new Float32Array(data), [width, height, 4]);
+    const dataProcessedTensor = ndarray(new Float32Array(width * height * 3), [
+      1,
+      3,
+      width,
+      height,
+    ]);
+
+    ops.assign(
+      dataProcessedTensor.pick(0, 0, null, null),
+      dataTensor.pick(null, null, 0)
+    );
+    ops.assign(
+      dataProcessedTensor.pick(0, 1, null, null),
+      dataTensor.pick(null, null, 1)
+    );
+    ops.assign(
+      dataProcessedTensor.pick(0, 2, null, null),
+      dataTensor.pick(null, null, 2)
+    );
+
+    ops.divseq(dataProcessedTensor, 255);
+
+    const tensor = new Tensor("float32", new Float32Array(width * height * 3), [
+      1,
+      3,
+      width,
+      height,
+    ]);
+
+    (tensor.data as Float32Array).set(dataProcessedTensor.data);
+    return tensor;
+  };
+
+  const conf2color = (conf: number) => {
+    const r = Math.round(255 * (1 - conf));
+    const g = Math.round(255 * conf);
+    return `rgb(${r},${g},0)`;
+  };
+
+  const postprocess = async (
+    tensor: Tensor,
+    ctx: CanvasRenderingContext2D
+  ) => {
+    const dx = ctx.canvas.width / modelResolution[0];
+    const dy = ctx.canvas.height / modelResolution[1];
+
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    for (let i = 0; i < tensor.dims[0]; i++) {
+      let [batch_id, x0, y0, x1, y1, cls_id, score] = tensor.data.slice(
+        i * 7,
+        i * 7 + 7
+      );
+
+      // scale to canvas size
+      [x0, x1] = [x0, x1].map((x: any) => x * dx);
+      [y0, y1] = [y0, y1].map((x: any) => x * dy);
+
+      [batch_id, x0, y0, x1, y1, cls_id] = [
+        batch_id,
+        x0,
+        y0,
+        x1,
+        y1,
+        cls_id,
+      ].map((x: any) => round(x));
+
+      [score] = [score].map((x: any) => round(x * 100, 1));
+      const label =
+        yoloClasses[cls_id].toString()[0].toUpperCase() +
+        yoloClasses[cls_id].toString().substring(1) +
+        " " +
+        score.toString() +
+        "%";
+      const color = conf2color(score / 100);
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      ctx.font = "20px Arial";
+      ctx.fillStyle = color;
+      ctx.fillText(label, x0, y0 - 5);
+
+      // fillrect with transparent color
+      ctx.fillStyle = color.replace(")", ", 0.2)").replace("rgb", "rgba");
+      ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    }
+  };
+
   const runModel = async (ctx: CanvasRenderingContext2D) => {
-    const data = props.preprocess(ctx);
+    const data = preprocess(ctx);
     let outputTensor: Tensor;
     let inferenceTime: number;
-    [outputTensor, inferenceTime] = await runModelUtils.runModel(
-      props.session,
+    [outputTensor, inferenceTime] = await dispatchModel(
+      session,
       data
     );
 
-    props.postprocess(outputTensor, props.inferenceTime, ctx);
+    postprocess(outputTensor, ctx);
     setInferenceTime(inferenceTime);
   };
 
@@ -135,8 +297,6 @@ const WebcamComponent = (props: any) => {
           imageSmoothing={true}
           videoConstraints={{
             facingMode: facingMode,
-            // width: props.width,
-            // height: props.height,
           }}
           onLoadedMetadata={() => {
             setWebcamCanvasOverlaySize();
@@ -198,15 +358,7 @@ const WebcamComponent = (props: any) => {
             >
               Switch Camera
             </button>
-            <button
-              onClick={() => {
-                reset();
-                props.changeModelResolution();
-              }}
-              className="p-2  border-dashed border-2 rounded-xl hover:translate-y-1 "
-            >
-              Change Model
-            </button>
+  
             <button
               onClick={reset}
               className="p-2  border-dashed border-2 rounded-xl hover:translate-y-1 "
@@ -215,7 +367,7 @@ const WebcamComponent = (props: any) => {
             </button>
           </div>
         </div>
-        <div>Using {props.modelName}</div>
+        <div>Using {modelName}</div>
         <div className="flex gap-3 flex-row flex-wrap justify-between items-center px-5 w-full">
           <div>
             {"Model Inference Time: " + inferenceTime.toFixed() + "ms"}

@@ -9,7 +9,7 @@ export async function createModelCpu(
   });
 }
 
-export async function runModel(
+export async function dispatchModel(
   model: InferenceSession,
   preprocessedData: Tensor
 ): Promise<[Tensor, number]> {
