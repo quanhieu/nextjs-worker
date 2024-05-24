@@ -1,7 +1,4 @@
-import Head from "next/head";
-import Yolo from "../components/models/Yolo";
-import { useEffect, useState } from "react";
-import dynamic from "next/dynamic";
+import Yolo from "../components/ObjectDetectionCamera";
 
 export default function Home() {
   return (
