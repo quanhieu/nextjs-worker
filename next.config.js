@@ -24,11 +24,11 @@ const nextConfig = {
           from: './node_modules/onnxruntime-web/dist/ort-wasm-simd.wasm',
           to: 'static/chunks/pages',
         },          
-          {
-            from: './models',
-            to: 'static/chunks/pages',
-          },
-        ],
+        {
+          from: './models',
+          to: 'static/chunks/pages',
+        },
+      ],
       }),
     );
 
