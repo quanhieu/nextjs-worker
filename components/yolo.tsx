@@ -1,5 +1,5 @@
 import Webcam from "react-webcam";
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useCallback } from "react";
 import { Tensor } from "onnxruntime-web";
 import { round } from "lodash";
 import ndarray from "ndarray";
@@ -19,8 +19,9 @@ const WebcamComponent = () => {
   const [facingMode, setFacingMode] = useState<string>("environment");
   const originalSize = useRef<number[]>([0, 0]);
   const [session, setSession] = useState<any>(null);
+  const [SSR, setSSR] = useState<Boolean>(true);
 
-    useEffect(() => {
+  useEffect(() => {
     const getSession = async () => {
       const session = await createModelCpu(
         `./_next/static/chunks/pages/${modelName}`
@@ -30,8 +31,7 @@ const WebcamComponent = () => {
     getSession();
   }, []);
 
-
-  const capture = () => {
+  const capture = useCallback(() => {
     const canvas = videoCanvasRef.current!;
     const context = canvas.getContext("2d", {
       willReadFrequently: true,
@@ -53,9 +53,9 @@ const WebcamComponent = () => {
       context.setTransform(1, 0, 0, 1, 0, 0);
     }
     return context;
-  };
+  }, [facingMode]);
 
-  const resizeCanvasCtx = (
+  const resizeCanvasCtx = useCallback((
     ctx: CanvasRenderingContext2D,
     targetWidth: number,
     targetHeight: number,
@@ -92,10 +92,9 @@ const WebcamComponent = () => {
     }
 
     return ctx;
-  };
+  }, []);
 
-
-  const preprocess = (ctx: CanvasRenderingContext2D) => {
+  const preprocess = useCallback((ctx: CanvasRenderingContext2D) => {
     const resizedCtx = resizeCanvasCtx(
       ctx,
       modelResolution[0],
@@ -142,15 +141,15 @@ const WebcamComponent = () => {
 
     (tensor.data as Float32Array).set(dataProcessedTensor.data);
     return tensor;
-  };
+  }, [resizeCanvasCtx]);
 
-  const conf2color = (conf: number) => {
+  const conf2color = useCallback((conf: number) => {
     const r = Math.round(255 * (1 - conf));
     const g = Math.round(255 * conf);
     return `rgb(${r},${g},0)`;
-  };
+  }, []);
 
-  const postprocess = async (
+  const postprocess = useCallback(async (
     tensor: Tensor,
     ctx: CanvasRenderingContext2D
   ) => {
@@ -197,9 +196,9 @@ const WebcamComponent = () => {
       ctx.fillStyle = color.replace(")", ", 0.2)").replace("rgb", "rgba");
       ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
     }
-  };
+  }, [conf2color]);
 
-  const runModel = async (ctx: CanvasRenderingContext2D) => {
+  const runModel = useCallback(async (ctx: CanvasRenderingContext2D) => {
     const data = preprocess(ctx);
     let outputTensor: Tensor;
     let inferenceTime: number;
@@ -210,9 +209,9 @@ const WebcamComponent = () => {
 
     postprocess(outputTensor, ctx);
     setInferenceTime(inferenceTime);
-  };
+  }, [postprocess, preprocess, session]);
 
-  const runLiveDetection = async () => {
+  const runLiveDetection = useCallback(async () => {
     if (liveDetection.current) {
       liveDetection.current = false;
       return;
@@ -228,9 +227,9 @@ const WebcamComponent = () => {
         requestAnimationFrame(() => resolve())
       );
     }
-  };
+  }, [capture, runModel]);
 
-  const processImage = async () => {
+  const processImage = useCallback(async () => {
     reset();
     const ctx = capture();
     if (!ctx) return;
@@ -245,17 +244,15 @@ const WebcamComponent = () => {
 
     await runModel(boxCtx);
     ctx.drawImage(boxCtx.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height);
-  };
+  }, [capture, runModel]);
 
-  const reset = async () => {
+  const reset = useCallback(async () => {
     var context = videoCanvasRef.current!.getContext("2d")!;
     context.clearRect(0, 0, originalSize.current[0], originalSize.current[1]);
     liveDetection.current = false;
-  };
+  }, []);
 
-  const [SSR, setSSR] = useState<Boolean>(true);
-
-  const setWebcamCanvasOverlaySize = () => {
+  const setWebcamCanvasOverlaySize = useCallback(() => {
     const element = webcamRef.current!.video!;
     if (!element) return;
     var w = element.offsetWidth;
@@ -264,7 +261,7 @@ const WebcamComponent = () => {
     if (!cv) return;
     cv.width = w;
     cv.height = h;
-  };
+  }, []);
 
   // close camera when browser tab is minimized
   useEffect(() => {

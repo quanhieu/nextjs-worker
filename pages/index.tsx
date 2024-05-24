@@ -1,4 +1,4 @@
-import Yolo from "../components/ObjectDetectionCamera";
+import Yolo from "../components/yolo";
 
 export default function Home() {
   return (
