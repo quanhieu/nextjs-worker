@@ -7,7 +7,7 @@ const withBundleAnalyzer = require('@next/bundle-analyzer')({
 })
 
 const nextConfig = {
-  reactStrictMode: true,
+  reactStrictMode: false,
   webpack: (config, { isServer }) => {
     config.experiments = { asyncWebAssembly: true, layers: true };
 

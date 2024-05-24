@@ -9,7 +9,7 @@ self.onmessage = async (event) => {
       const response = await fetch('./pages/yolov7-tiny_640x640.onnx');
       console.log(response);
       if (!response.ok) {
-        throw new Error(`Failed to fetch ${payload.url}`);
+        throw new Error(`Failed to fetch `);
       }
 
       const arrayBuffer = await response.arrayBuffer();
@@ -31,6 +31,7 @@ self.onmessage = async (event) => {
     case "dispatchModel":
       if (model) {
         try {
+          console.log('model ', model)
           const feeds: Record<string, Tensor> = {};
           feeds[model.inputNames[0]] = payload.preprocessedData;
           const start = Date.now();

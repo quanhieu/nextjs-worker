@@ -1,11 +1,10 @@
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useCallback } from "react";
 import Webcam from "react-webcam";
 import { Tensor } from "onnxruntime-web";
 import { round } from "lodash";
 import ndarray from "ndarray";
 import ops from "ndarray-ops";
 import { yoloClasses } from "../data/yolo_classes";
-import { createModelCpu, dispatchModel } from "../utils/runModel";
 
 const modelResolution = [640, 640];
 const modelName = "yolov7-tiny_640x640.onnx";
@@ -15,16 +14,42 @@ const WebcamComponent = () => {
   const [totalTime, setTotalTime] = useState<number>(0);
   const webcamRef = useRef<Webcam>(null);
   const videoCanvasRef = useRef<HTMLCanvasElement>(null);
-  const liveDetection = useRef<boolean>(false);
+  const [liveDetection, setLiveDetection] = useState<boolean>(false);
   const [facingMode, setFacingMode] = useState<string>("environment");
   const originalSize = useRef<number[]>([0, 0]);
+  const [SSR, setSSR] = useState<Boolean>(true);
+  const workerRef = useRef<Worker | null>(null);
+  const [outputTensor, setOutputTensor] = useState<Tensor | any>(null);
 
   useEffect(() => {
-    createModelCpu(`./pages/${modelName}`);
+    workerRef.current = new Worker(new URL('../utils/modelWorker.ts', import.meta.url), { type: 'module' });
+    // Init worker 
+    workerRef.current.postMessage({ type: "init" });
+    workerRef.current.onmessage = (event) => {
+      const { type, success, result, error } = event.data;
+      if (type === "dispatchModel") {
+        if (success) {
+          setOutputTensor(result[0]);
+          setInferenceTime(result[1]);
+        } else {
+          console.error(error);
+        }
+      }
+    };
+
+    // requestAnimationFrame(() => console.log('aaaa'));
+
+    return () => {
+      if (workerRef.current) {
+        // workerRef.current.terminate();
+      }
+    }
   }, []);
 
   const capture = () => {
     const canvas = videoCanvasRef.current!;
+    if (!canvas) return;
+
     const context = canvas.getContext("2d", {
       willReadFrequently: true,
     })!;
@@ -102,52 +127,96 @@ const WebcamComponent = () => {
     const dy = ctx.canvas.height / modelResolution[1];
 
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    for (let i = 0; i < tensor.dims[0]; i++) {
-      let [batch_id, x0, y0, x1, y1, cls_id, score] = tensor.data.slice(i * 7, i * 7 + 7);
-
-      [x0, x1] = [x0, x1].map((x: any) => x * dx);
-      [y0, y1] = [y0, y1].map((x: any) => x * dy);
-
-      [batch_id, x0, y0, x1, y1, cls_id] = [batch_id, x0, y0, x1, y1, cls_id].map((x: any) => round(x));
-      [score] = [score].map((x: any) => round(x * 100, 1));
-
-      const label = yoloClasses[cls_id].toString()[0].toUpperCase() + yoloClasses[cls_id].toString().substring(1) + " " + score.toString() + "%";
-      const color = conf2color(score / 100);
-
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 3;
-      ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
-      ctx.font = "20px Arial";
-      ctx.fillStyle = color;
-      ctx.fillText(label, x0, y0 - 5);
-
-      ctx.fillStyle = color.replace(")", ", 0.2)").replace("rgb", "rgba");
-      ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    
+    if (tensor && tensor.dims.length > 0) {
+      for (let i = 0; i < tensor.dims[0]; i++) {
+        let [batch_id, x0, y0, x1, y1, cls_id, score] = tensor.data.slice(i * 7, i * 7 + 7);
+  
+        [x0, x1] = [x0, x1].map((x: any) => x * dx);
+        [y0, y1] = [y0, y1].map((x: any) => x * dy);
+  
+        [batch_id, x0, y0, x1, y1, cls_id] = [batch_id, x0, y0, x1, y1, cls_id].map((x: any) => round(x));
+        [score] = [score].map((x: any) => round(x * 100, 1));
+  
+        const label = yoloClasses[cls_id].toString()[0].toUpperCase() + yoloClasses[cls_id].toString().substring(1) + " " + score.toString() + "%";
+        const color = conf2color(score / 100);
+  
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+        ctx.font = "20px Arial";
+        ctx.fillStyle = color;
+        ctx.fillText(label, x0, y0 - 5);
+  
+        ctx.fillStyle = color.replace(")", ", 0.2)").replace("rgb", "rgba");
+        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+      }
     }
   };
 
   const runModel = async (ctx: CanvasRenderingContext2D) => {
     const data = preprocess(ctx);
-    const [outputTensor, inferenceTime] = await dispatchModel(data);
-    postprocess(outputTensor, ctx);
-    setInferenceTime(inferenceTime);
+    
+    if (workerRef.current) {
+      workerRef.current.postMessage({ type: "dispatchModel", payload: { preprocessedData: data } })
+    }
+    if (outputTensor) {
+      postprocess(outputTensor, ctx);
+    }
   };
 
-  const runLiveDetection = async () => {
-    if (liveDetection.current) {
-      liveDetection.current = false;
-      return;
-    }
-    liveDetection.current = true;
-    while (liveDetection.current) {
+  const toggleLiveDetection = useCallback(() => {
+    setLiveDetection(prev => !prev);
+  }, []);
+
+  // useEffect(() => {
+  //   let intervalId: any
+
+  //   if (liveDetection) {
+  //     intervalId = setInterval(() => {
+  //       const context = capture();
+  //       if (context) {
+  //         const data = preprocess(context);
+
+  //         if(workerRef.current) {
+  //           workerRef.current.postMessage({ type: "dispatchModel", payload: { preprocessedData: data } })
+  //         }
+  //       }
+  //     }, 100)
+  //   }
+
+  //   return () => {
+  //     if (intervalId) {
+  //       clearInterval(intervalId)
+  //     }
+  //   }
+  // }, [liveDetection])
+
+  useEffect(() => {
+    if (liveDetection) {
       const startTime = Date.now();
-      const ctx = capture();
-      if (!ctx) return;
-      await runModel(ctx);
-      setTotalTime(Date.now() - startTime);
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const ctx = capture();
+        if (!ctx) return;
+  
+        runModel(ctx);
+        setTotalTime(Date.now() - startTime);
+
+        const reDraw = async () => {
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve())
+          )
+        }
+        reDraw()
     }
-  };
+  }, [liveDetection, runModel]);
+
+  // useEffect(() => {
+  //   const context = capture()
+
+  //   if (context) {
+  //     postprocess(outputTensor, context)
+  //   }
+  // }, [outputTensor])
 
   const processImage = async () => {
     reset();
@@ -166,10 +235,8 @@ const WebcamComponent = () => {
   const reset = async () => {
     const context = videoCanvasRef.current!.getContext("2d")!;
     context.clearRect(0, 0, originalSize.current[0], originalSize.current[1]);
-    liveDetection.current = false;
+    setLiveDetection(false);
   };
-
-  const [SSR, setSSR] = useState<Boolean>(true);
 
   const setWebcamCanvasOverlaySize = () => {
     const element = webcamRef.current!.video!;
@@ -185,7 +252,7 @@ const WebcamComponent = () => {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        liveDetection.current = false;
+        setLiveDetection(false);
       }
       setSSR(document.hidden);
     };
@@ -236,14 +303,8 @@ const WebcamComponent = () => {
               Capture Photo
             </button>
             <button
-              onClick={async () => {
-                if (liveDetection.current) {
-                  liveDetection.current = false;
-                } else {
-                  runLiveDetection();
-                }
-              }}
-              className={`p-2 border-dashed border-2 rounded-xl hover:translate-y-1 ${liveDetection.current ? "bg-white text-black" : ""}`}
+              onClick={toggleLiveDetection}
+              className={`p-2 border-dashed border-2 rounded-xl hover:translate-y-1 ${liveDetection ? "bg-white text-black" : ""}`}
             >
               Live Detection
             </button>
